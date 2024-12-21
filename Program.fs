@@ -1,6 +1,9 @@
 ﻿open Spectre
 open System.Diagnostics
 open Spectre.Console
+open OpenAI.Chat
+open System.Text.Json
+open System
 
 type State = {
     CommitType: string 
@@ -8,8 +11,49 @@ type State = {
     WhyItChanged: string 
     WhatEffect: string 
 }with 
+    member this.Format() =        
+        sprintf $"what changed?: {this.WhatChanged} \nwhy?: {this.WhyItChanged} \neffect?: {this.WhatEffect}"
+
+    member this.AISummary() =        
+        let client = ChatClient("gpt-4o-mini", Environment.GetEnvironmentVariable("OPENAI_API_KEY"))
+
+        let messages = [|
+            SystemChatMessage("you will summarize a git commit message.") :> ChatMessage
+            UserChatMessage(this.Format()) :> ChatMessage
+        |]
+
+        let jsonSchema = """
+        {
+            "type": "object",
+            "required": [
+              "summary"
+            ],
+            "properties": {
+              "summary": {
+                "type": "string",
+                "description": "A brief summary, limited to 100 characters."
+              }
+            },
+            "additionalProperties": false
+        }
+        """
+
+        let options = ChatCompletionOptions(
+            ResponseFormat = ChatResponseFormat.CreateJsonSchemaFormat(
+                jsonSchemaFormatName = "summary_schema",
+                jsonSchema = BinaryData.FromBytes(Text.Encoding.UTF8.GetBytes(jsonSchema)),
+                jsonSchemaIsStrict = true
+            )
+        )
+
+        let completion = client.CompleteChat(messages, options)
+        use structuredJson = JsonDocument.Parse(completion.Value.Content.[0].Text)
+        structuredJson.RootElement.GetProperty("summary").GetString()
+
+
     member this.ToMessage() = 
-        sprintf $"[{this.CommitType}] \nwhat changed?: {this.WhatChanged} \nwhy?: {this.WhyItChanged} \neffect?: {this.WhatEffect}"
+        let summary = this.AISummary() 
+        sprintf $"[{this.CommitType}]: {summary} \n{this.Format()}"
 
 //Q1: feat, fix, chore, 
 let determineCommitType state =
